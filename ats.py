@@ -174,10 +174,12 @@ def generate_ats(
         total_line = base_0 + base_iva + monto_iva
         _sub(fp, "total", f"{total_line:.2f}")
 
-    # Serialize
+    # Serialize. Nota: con lxml 6, encoding="unicode" + xml_declaration=True lanza
+    # ValueError. Serializamos a bytes UTF-8 (con declaracion, como exige el SRI) y
+    # decodificamos a str. Mismo XML resultante.
     xml_str = etree.tostring(
-        root, encoding="unicode", xml_declaration=True, pretty_print=True,
-    )
+        root, encoding="UTF-8", xml_declaration=True, pretty_print=True,
+    ).decode("utf-8")
 
     log.info("ATS generado: %d ventas, %d compras, periodo %04d-%02d",
              len(invoices), len(purchases), year, month)
