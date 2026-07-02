@@ -9,14 +9,15 @@ including the clave de acceso as a Code128 barcode.
 """
 import io
 import logging
+from datetime import datetime
 
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+from reportlab.lib.units import inch, mm
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
 from reportlab.lib import colors
 from reportlab.platypus import (
-    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer,
+    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image,
 )
 from reportlab.graphics.barcode.code128 import Code128
 
@@ -56,7 +57,15 @@ def generate_ride(invoice_data: dict, sri_data: dict, config: dict) -> bytes:
     styles = getSampleStyleSheet()
     elements = []
 
-    # Styles (el encabezado usa markup <b> inline, no un estilo de título aparte)
+    # Styles
+    style_title = ParagraphStyle(
+        "ride_title", parent=styles["Title"],
+        fontSize=14, spaceAfter=2, spaceBefore=0,
+    )
+    style_subtitle = ParagraphStyle(
+        "ride_subtitle", parent=styles["Normal"],
+        fontSize=10, spaceAfter=2,
+    )
     style_normal = ParagraphStyle(
         "ride_normal", parent=styles["Normal"],
         fontSize=8, spaceAfter=1,

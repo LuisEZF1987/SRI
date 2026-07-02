@@ -221,7 +221,10 @@ def build_factura_xml(config: dict, invoice: dict, lines: list) -> str:
     total = float(invoice.get("total", 0))
 
     _add_text(info_fac, "totalSinImpuestos", f"{subtotal_0 + subtotal_iva:.2f}")
-    _add_text(info_fac, "totalDescuento", "0.00")
+    total_descuento = round(sum(
+        round(abs(float(l.get("quantity", 1))) * float(l.get("unit_price", 0))
+              * float(l.get("discount_percent", 0)) / 100, 2) for l in lines), 2)
+    _add_text(info_fac, "totalDescuento", f"{total_descuento:.2f}")
 
     # totalConImpuestos
     total_impuestos = etree.SubElement(info_fac, "totalConImpuestos")
@@ -260,7 +263,9 @@ def build_factura_xml(config: dict, invoice: dict, lines: list) -> str:
         _add_text(detalle, "descripcion", ln.get("description", "Servicio")[:300])
         _add_text(detalle, "cantidad", f"{abs(float(ln.get('quantity', 1))):.2f}")
         _add_text(detalle, "precioUnitario", f"{float(ln.get('unit_price', 0)):.2f}")
-        _add_text(detalle, "descuento", "0.00")
+        desc = round(abs(float(ln.get("quantity", 1))) * float(ln.get("unit_price", 0))
+                     * float(ln.get("discount_percent", 0)) / 100, 2)
+        _add_text(detalle, "descuento", f"{desc:.2f}")
         line_total = abs(float(ln.get("line_total", 0)))
         _add_text(detalle, "precioTotalSinImpuesto", f"{line_total:.2f}")
 
@@ -420,7 +425,9 @@ def build_nota_credito_xml(
         _add_text(detalle, "descripcion", ln.get("description", "Servicio")[:300])
         _add_text(detalle, "cantidad", f"{abs(float(ln.get('quantity', 1))):.2f}")
         _add_text(detalle, "precioUnitario", f"{float(ln.get('unit_price', 0)):.2f}")
-        _add_text(detalle, "descuento", "0.00")
+        desc = round(abs(float(ln.get("quantity", 1))) * float(ln.get("unit_price", 0))
+                     * float(ln.get("discount_percent", 0)) / 100, 2)
+        _add_text(detalle, "descuento", f"{desc:.2f}")
         line_total = abs(float(ln.get("line_total", 0)))
         _add_text(detalle, "precioTotalSinImpuesto", f"{line_total:.2f}")
 
