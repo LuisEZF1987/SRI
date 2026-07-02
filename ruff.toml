@@ -1,0 +1,9 @@
+# Lint conservador: errores reales (pyflakes + sintaxis E9), sin ruido de estilo,
+# para no romper el codigo existente. Endurecer mas adelante (E/W/I/B).
+line-length = 120
+
+[lint]
+select = ["E9", "F"]
+
+[lint.per-file-ignores]
+"tests/*" = ["F401"]

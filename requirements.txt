@@ -1,0 +1,13 @@
+# Dependencias del módulo SRI (facturación electrónica Ecuador). Pins exactos,
+# todos sin vulnerabilidades conocidas (verificado con pip-audit):
+#   lxml 6.1.0        -> PYSEC-2026-87
+#   cryptography 48.0.1 -> CVE-2024-12797, CVE-2026-26007, GHSA-537c-gmf6-5ccf
+#   signxml 5.0.1     -> CVE-2025-48994/48995 (además admite lxml<7 y cryptography>=45)
+#   requests 2.33.0   -> CVE-2026-25645
+#   zeep 4.3.3        -> GHSA-4cc2-g9w2-fhf6
+lxml==6.1.0
+reportlab==4.2.5
+cryptography==48.0.1
+signxml==5.0.1
+requests==2.33.0
+zeep==4.3.3

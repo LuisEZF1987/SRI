@@ -1,0 +1,4 @@
+# Dependencias para correr las pruebas (no van a la imagen de produccion).
+-r requirements.txt
+pytest==8.*
+ruff==0.*
