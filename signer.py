@@ -16,42 +16,40 @@ from typing import Optional
 log = logging.getLogger("sri.signer")
 
 
-def sign_xml(xml_str: str, cert_path: str, cert_password: str) -> str:
+def sign_xml(xml_str: str, cert_path: str, cert_password: str,
+             signing_time_iso: Optional[str] = None) -> str:
     """
-    Sign an XML string using XAdES-BES with a .p12 certificate.
+    Firma un XML de comprobante electronico con XAdES-BES conforme al SRI Ecuador.
+
+    El SRI NO acepta una firma XML-DSig generica (la RECIBE pero la deja
+    NO AUTORIZADO, error 39): exige XAdES-BES con Reference a `#comprobante`,
+    SignedProperties (SigningTime + SigningCertificate) y KeyInfo con
+    X509Certificate + RSAKeyValue. Eso lo produce `xades_sri.sign`. Los metodos
+    genericos (signxml/xmlsec1) quedan solo como respaldo de emergencia.
 
     Parameters:
-        xml_str: The XML document to sign (UTF-8 string)
-        cert_path: Path to the .p12 / .pfx certificate file
-        cert_password: Password for the certificate
+        xml_str: XML a firmar (nodo raiz con Id="comprobante").
+        cert_path: ruta al .p12 / .pfx (soporta los legacy del SRI Ecuador).
+        cert_password: clave del certificado.
+        signing_time_iso: marca de tiempo ISO-8601 con offset; si None, ahora.
 
     Returns:
-        Signed XML string
-
-    Raises:
-        RuntimeError: If signing fails with both methods
+        XML firmado (string).
     """
     if not os.path.exists(cert_path):
         raise FileNotFoundError(f"Certificate file not found: {cert_path}")
 
-    # Try signxml library first
+    # Metodo correcto para el SRI: XAdES-BES.
     try:
-        return _sign_with_signxml(xml_str, cert_path, cert_password)
-    except ImportError:
-        log.info("signxml not available, falling back to xmlsec1 subprocess")
-    except Exception as e:
-        log.warning("signxml failed: %s, trying xmlsec1 fallback", e)
-
-    # Fallback: xmlsec1 command-line
-    try:
-        return _sign_with_xmlsec1(xml_str, cert_path, cert_password)
-    except FileNotFoundError:
-        raise RuntimeError(
-            "Neither signxml library nor xmlsec1 command-line tool available. "
-            "Install signxml (pip install signxml) or xmlsec1 (apt install xmlsec1)."
-        )
-    except Exception as e:
-        raise RuntimeError(f"XML signing failed: {e}")
+        from . import xades_sri
+    except ImportError:  # ejecucion como modulo suelto (no paquete)
+        import xades_sri
+    if signing_time_iso is None:
+        import datetime
+        signing_time_iso = datetime.datetime.now().astimezone().replace(
+            microsecond=0).isoformat()
+    key_pem, cert_pem = _p12_to_pem(cert_path, cert_password)
+    return xades_sri.sign(xml_str, key_pem, cert_pem, signing_time_iso)
 
 
 def _p12_to_pem(cert_path: str, cert_password: str):
