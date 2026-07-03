@@ -54,32 +54,66 @@ def sign_xml(xml_str: str, cert_path: str, cert_password: str) -> str:
         raise RuntimeError(f"XML signing failed: {e}")
 
 
+def _p12_to_pem(cert_path: str, cert_password: str):
+    """Devuelve (key_pem_bytes, cert_pem_bytes) desde un .p12.
+
+    Los certificados de firma del SRI Ecuador (Security Data, ANF, Uanataca,
+    Consejo de la Judicatura) suelen venir cifrados con algoritmos PKCS#12
+    *legacy* (RC2-40-CBC / PBE-SHA1-3DES) que OpenSSL 3 / la librería
+    `cryptography` rechazan por defecto. Estrategia:
+      1) intentar `cryptography` (rápido, certs modernos);
+      2) si falla, reintentar con `openssl pkcs12 -legacy` (provider legacy),
+         que sí descifra esos algoritmos, y cargar los PEM resultantes.
+    Fail-closed: si ninguna vía funciona, propaga el error.
+    """
+    from cryptography.hazmat.primitives.serialization import (
+        pkcs12, Encoding, PrivateFormat, NoEncryption,
+        load_pem_private_key)
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.x509 import load_pem_x509_certificate
+
+    pw_bytes = cert_password.encode("utf-8") if cert_password else None
+    try:
+        with open(cert_path, "rb") as f:
+            key, cert, _ = pkcs12.load_key_and_certificates(
+                f.read(), pw_bytes, default_backend())
+        if key is None or cert is None:
+            raise ValueError("no se pudo extraer clave/certificado del .p12")
+        return (
+            key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()),
+            cert.public_bytes(Encoding.PEM),
+        )
+    except Exception as modern_err:  # noqa: BLE001 - se reintenta con -legacy
+        log.info("carga moderna del .p12 fallo (%s); reintentando con openssl -legacy",
+                 modern_err)
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        km, cm = os.path.join(d, "k.pem"), os.path.join(d, "c.pem")
+        pass_arg = f"pass:{cert_password}" if cert_password else "pass:"
+        for extra, out in ((["-nocerts", "-nodes"], km), (["-clcerts", "-nokeys"], cm)):
+            r = subprocess.run(
+                ["openssl", "pkcs12", "-in", cert_path, *extra, "-legacy",
+                 "-passin", pass_arg, "-out", out],
+                capture_output=True, text=True, timeout=15)
+            if r.returncode != 0:
+                raise RuntimeError(
+                    f"openssl -legacy no pudo leer el .p12: {r.stderr.strip()[:200]}")
+        key = load_pem_private_key(open(km, "rb").read(), None)
+        cert = load_pem_x509_certificate(open(cm, "rb").read())
+        return (
+            key.private_bytes(Encoding.PEM, PrivateFormat.PKCS8, NoEncryption()),
+            cert.public_bytes(Encoding.PEM),
+        )
+
+
 def _sign_with_signxml(xml_str: str, cert_path: str, cert_password: str) -> str:
     """Sign using the signxml Python library."""
     from lxml import etree
-    from cryptography.hazmat.primitives.serialization import pkcs12, Encoding, PrivateFormat, NoEncryption
-    from cryptography.hazmat.backends import default_backend
     import signxml
 
-    # Load .p12 certificate
-    with open(cert_path, "rb") as f:
-        p12_data = f.read()
-
-    password_bytes = cert_password.encode("utf-8") if cert_password else None
-    private_key, certificate, additional_certs = pkcs12.load_key_and_certificates(
-        p12_data, password_bytes, default_backend()
-    )
-
-    if private_key is None or certificate is None:
-        raise ValueError("Could not extract key and certificate from .p12 file")
-
-    # Serialize key and cert to PEM
-    key_pem = private_key.private_bytes(
-        encoding=Encoding.PEM,
-        format=PrivateFormat.PKCS8,
-        encryption_algorithm=NoEncryption(),
-    )
-    cert_pem = certificate.public_bytes(Encoding.PEM)
+    # Carga tolerante a .p12 legacy (SRI Ecuador).
+    key_pem, cert_pem = _p12_to_pem(cert_path, cert_password)
 
     # Parse XML
     root = etree.fromstring(xml_str.encode("utf-8"))
@@ -160,34 +194,16 @@ def _extract_p12(
     p12_path: str, password: str,
     key_out: str, cert_out: str,
 ) -> None:
-    """Extract PEM key and cert from a .p12 file using openssl."""
-    pass_arg = f"pass:{password}" if password else "pass:"
+    """Extract PEM key and cert from a .p12 file using openssl.
 
-    # Extract private key
-    result = subprocess.run(
-        [
-            "openssl", "pkcs12", "-in", p12_path,
-            "-nocerts", "-nodes",
-            "-passin", pass_arg,
-            "-out", key_out,
-        ],
-        capture_output=True, text=True, timeout=15,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Failed to extract private key: {result.stderr}")
-
-    # Extract certificate
-    result = subprocess.run(
-        [
-            "openssl", "pkcs12", "-in", p12_path,
-            "-clcerts", "-nokeys",
-            "-passin", pass_arg,
-            "-out", cert_out,
-        ],
-        capture_output=True, text=True, timeout=15,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"Failed to extract certificate: {result.stderr}")
+    Reutiliza `_p12_to_pem` (que ya maneja los .p12 legacy del SRI Ecuador vía
+    `openssl -legacy`) y escribe los PEM a los archivos que consume xmlsec1.
+    """
+    key_pem, cert_pem = _p12_to_pem(p12_path, password)
+    with open(key_out, "wb") as f:
+        f.write(key_pem)
+    with open(cert_out, "wb") as f:
+        f.write(cert_pem)
 
 
 def _add_signature_template(xml_str: str) -> str:
@@ -237,19 +253,11 @@ def verify_p12(cert_path: str, cert_password: str) -> Optional[dict]:
     Returns None if invalid.
     """
     try:
-        from cryptography.hazmat.primitives.serialization import pkcs12
-        from cryptography.hazmat.backends import default_backend
+        from cryptography.x509 import load_pem_x509_certificate
 
-        with open(cert_path, "rb") as f:
-            p12_data = f.read()
-
-        password_bytes = cert_password.encode("utf-8") if cert_password else None
-        private_key, certificate, _ = pkcs12.load_key_and_certificates(
-            p12_data, password_bytes, default_backend()
-        )
-
-        if certificate is None:
-            return None
+        # _p12_to_pem tolera los .p12 legacy del SRI Ecuador (openssl -legacy).
+        _key_pem, cert_pem = _p12_to_pem(cert_path, cert_password)
+        certificate = load_pem_x509_certificate(cert_pem)
 
         return {
             "subject": str(certificate.subject),
