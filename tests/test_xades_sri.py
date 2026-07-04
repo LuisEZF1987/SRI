@@ -86,7 +86,7 @@ def test_firma_criptografica_valida(signed, key_and_cert):
     c14n = etree.tostring(signed_info, method="c14n", exclusive=False)
     sigval = base64.b64decode(root.find(".//ds:SignatureValue", NS).text)
     # No lanza => firma valida con la clave publica del firmante
-    key.public_key().verify(sigval, c14n, padding.PKCS1v15(), hashes.SHA1())
+    key.public_key().verify(sigval, c14n, padding.PKCS1v15(), hashes.SHA1())  # nosec B303 — RSA-SHA1 mandado por el SRI
 
 
 def test_digest_comprobante_correcto(signed):
@@ -99,5 +99,6 @@ def test_digest_comprobante_correcto(signed):
     # recomputar: root sin el nodo Signature (efecto del transform enveloped)
     root.remove(sig)
     recomputado = base64.b64encode(
-        hashlib.sha1(etree.tostring(root, method="c14n", exclusive=False)).digest()).decode()
+        hashlib.sha1(  # nosec B324 — digest SHA1 mandado por el SRI
+            etree.tostring(root, method="c14n", exclusive=False)).digest()).decode()
     assert declarado == recomputado
