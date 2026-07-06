@@ -203,16 +203,22 @@ def build_factura_xml(config: dict, invoice: dict, lines: list) -> str:
     if config.get("obligado_contabilidad"):
         _add_text(info_fac, "obligadoContabilidad", config["obligado_contabilidad"])
 
-    # Buyer identification
-    patient_doc = invoice.get("patient_document", "")
-    tipo_id = _tipo_identificacion(patient_doc)
+    # Buyer identification — comprador: el paciente, o un tercero si "facturar a otro".
+    bill_to_doc = (invoice.get("bill_to_document") or "").strip()
+    if bill_to_doc:
+        buyer_doc = bill_to_doc
+        buyer_name = invoice.get("bill_to_name") or "CONSUMIDOR FINAL"
+        buyer_addr = invoice.get("bill_to_address")
+    else:
+        buyer_doc = invoice.get("patient_document", "")
+        buyer_name = invoice.get("patient_name", "CONSUMIDOR FINAL")
+        buyer_addr = invoice.get("patient_address")
+    tipo_id = _tipo_identificacion(buyer_doc)
     _add_text(info_fac, "tipoIdentificacionComprador", tipo_id)
-    _add_text(info_fac, "razonSocialComprador",
-              invoice.get("patient_name", "CONSUMIDOR FINAL"))
-    _add_text(info_fac, "identificacionComprador",
-              patient_doc or "9999999999999")
-    if invoice.get("patient_address"):
-        _add_text(info_fac, "direccionComprador", invoice["patient_address"])
+    _add_text(info_fac, "razonSocialComprador", buyer_name)
+    _add_text(info_fac, "identificacionComprador", buyer_doc or "9999999999999")
+    if buyer_addr:
+        _add_text(info_fac, "direccionComprador", buyer_addr)
 
     # Totals
     subtotal_0 = float(invoice.get("subtotal_0", 0))
@@ -281,6 +287,21 @@ def build_factura_xml(config: dict, invoice: dict, lines: list) -> str:
             _add_text(imp, "tarifa", "0")
         _add_text(imp, "baseImponible", f"{line_total:.2f}")
         _add_text(imp, "valor", f"{abs(float(ln.get('tax_amount', 0))):.2f}")
+
+    # --- infoAdicional --- (cuando la factura va a un tercero, el paciente atendido va aqui; + contacto)
+    campos = []
+    if bill_to_doc and invoice.get("patient_name"):
+        campos.append(("Paciente", invoice["patient_name"]))
+    email = invoice.get("bill_to_email") if bill_to_doc else invoice.get("patient_email")
+    if email:
+        campos.append(("Email", email))
+    if invoice.get("patient_phone"):
+        campos.append(("Telefono", invoice["patient_phone"]))
+    if campos:
+        info_ad = etree.SubElement(root, "infoAdicional")
+        for nombre, valor in campos:
+            ca = etree.SubElement(info_ad, "campoAdicional", nombre=nombre)
+            ca.text = str(valor)[:300]
 
     xml_str = etree.tostring(
         root, xml_declaration=True, encoding="UTF-8", pretty_print=True,
