@@ -89,6 +89,19 @@ def test_factura_xml_bien_formado_y_totales():
     assert len(root.findall("detalles/detalle")) == 2
 
 
+def test_factura_a_tercero_comprador_y_paciente_en_dato_adicional():
+    """Si la factura va a un tercero (bill_to), el comprador es el tercero y el paciente
+    atendido viaja en infoAdicional."""
+    inv = dict(_invoice(), bill_to_document="1790012345001",
+               bill_to_name="CONSTRUCTORA XYZ CIA LTDA", bill_to_address="Av. Amazonas")
+    root = etree.fromstring(xb.build_factura_xml(CONFIG, inv, _lines()).encode("utf-8"))
+    assert root.findtext("infoFactura/tipoIdentificacionComprador") == "04"           # RUC
+    assert root.findtext("infoFactura/razonSocialComprador") == "CONSTRUCTORA XYZ CIA LTDA"
+    assert root.findtext("infoFactura/identificacionComprador") == "1790012345001"
+    campos = {c.get("nombre"): c.text for c in root.findall("infoAdicional/campoAdicional")}
+    assert campos.get("Paciente") == "JUAN PEREZ"
+
+
 # ── Nota de crédito XML ──────────────────────────────────────────────────────
 def test_nota_credito_referencia_factura_original():
     nc = dict(_invoice(), notes="Devolución total")
