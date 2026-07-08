@@ -145,9 +145,9 @@ def generate_ride(invoice_data: dict, sri_data: dict, config: dict) -> bytes:
         try:
             from reportlab.lib.utils import ImageReader
             iw, ih = ImageReader(logo_path).getSize()
-            disp_h = 1.0 * inch
+            disp_h = 0.85 * inch
             disp_w = disp_h * iw / float(ih)
-            max_w = 2.6 * inch
+            max_w = 0.95 * inch
             if disp_w > max_w:
                 disp_w, disp_h = max_w, max_w * ih / float(iw)
             logo_flowable = Image(logo_path, width=disp_w, height=disp_h)
@@ -155,8 +155,18 @@ def generate_ride(invoice_data: dict, sri_data: dict, config: dict) -> bytes:
         except Exception as e:
             log.warning("No se pudo cargar el logo del RIDE: %s", e)
 
-    left_cell = ([logo_flowable, Spacer(1, 4), Paragraph(left_info, style_normal)]
-                 if logo_flowable else Paragraph(left_info, style_normal))
+    # Logo a la izquierda y datos del emisor al lado (no debajo), para no empujar el texto.
+    _emisor_para = Paragraph(left_info, style_normal)
+    if logo_flowable:
+        left_cell = Table([[logo_flowable, _emisor_para]], colWidths=[1.05 * inch, 3.5 * inch])
+        left_cell.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                       ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                                       ("RIGHTPADDING", (0, 0), (0, 0), 6),
+                                       ("RIGHTPADDING", (1, 0), (1, 0), 0),
+                                       ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                       ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
+    else:
+        left_cell = _emisor_para
 
     # Sello de borrador cuando el comprobante aun no esta autorizado por el SRI.
     if not num_autorizacion:
@@ -166,7 +176,7 @@ def generate_ride(invoice_data: dict, sri_data: dict, config: dict) -> bytes:
         elements.append(Spacer(1, 4))
 
     header_data = [[left_cell, Paragraph(right_info, style_normal)]]
-    header_table = Table(header_data, colWidths=[3.5 * inch, 3.5 * inch])
+    header_table = Table(header_data, colWidths=[4.7 * inch, 2.8 * inch])
     header_table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
@@ -458,23 +468,33 @@ def generate_retencion_ride(ret_data: dict, sri_data: dict, config: dict) -> byt
         try:
             from reportlab.lib.utils import ImageReader
             iw, ih = ImageReader(lp).getSize()
-            dh = 1.0 * inch
+            dh = 0.85 * inch
             dw = dh * iw / float(ih)
-            if dw > 2.6 * inch:
-                dw, dh = 2.6 * inch, 2.6 * inch * ih / float(iw)
+            if dw > 0.95 * inch:  # logos anchos: limita el ancho y recalcula el alto
+                dw, dh = 0.95 * inch, 0.95 * inch * ih / float(iw)
             logo_flowable = Image(lp, width=dw, height=dh)
             logo_flowable.hAlign = "LEFT"
         except Exception as e:
             log.warning("logo RIDE retencion: %s", e)
-    left_cell = ([logo_flowable, Spacer(1, 4), Paragraph(left, st_norm)]
-                 if logo_flowable else Paragraph(left, st_norm))
+    # Logo a la izquierda y datos del emisor al lado (no debajo), para no empujar el texto.
+    emisor_para = Paragraph(left, st_norm)
+    if logo_flowable:
+        left_cell = Table([[logo_flowable, emisor_para]], colWidths=[1.05 * inch, 3.5 * inch])
+        left_cell.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                       ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                                       ("RIGHTPADDING", (0, 0), (0, 0), 6),
+                                       ("RIGHTPADDING", (1, 0), (1, 0), 0),
+                                       ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                       ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
+    else:
+        left_cell = emisor_para
 
     if not num_aut:
         elements.append(Paragraph(
             "DOCUMENTO SIN VALIDEZ TRIBUTARIA &mdash; PENDIENTE DE AUTORIZACION DEL SRI", st_warn))
         elements.append(Spacer(1, 4))
 
-    ht = Table([[left_cell, Paragraph(right, st_norm)]], colWidths=[3.5 * inch, 3.5 * inch])
+    ht = Table([[left_cell, Paragraph(right, st_norm)]], colWidths=[4.7 * inch, 2.8 * inch])
     ht.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
                             ("BOX", (0, 0), (0, 0), 0.5, colors.HexColor("#94a3b8")),
                             ("BOX", (1, 0), (1, 0), 0.5, colors.HexColor("#94a3b8")),
