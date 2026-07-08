@@ -498,3 +498,148 @@ def _tipo_identificacion(document_id: str) -> str:
     if len(doc) == 10 and doc.isdigit():
         return "05"  # Cedula
     return "06"  # Pasaporte / otro
+
+
+# ---------------------------------------------------------------------------
+# Comprobante de Retencion XML (tipo_comprobante = '07', schema v2.0.0)
+# ---------------------------------------------------------------------------
+def build_retencion_xml(config: dict, ret: dict):
+    """
+    Construye el XML del Comprobante de Retencion electronico (codDoc '07'), esquema
+    del SRI **v2.0.0** (con `docsSustento`). Lo emite el AGENTE DE RETENCION sobre el
+    comprobante de un proveedor (la compra registrada en Contabilidad).
+
+    Parameters:
+        config: {ambiente, ruc, razon_social, nombre_comercial, direccion_matriz,
+                 obligado_contabilidad, contribuyente_especial(opcional)}
+        ret: {
+          establecimiento, punto_emision, secuencial,           # de esta retencion
+          fecha_emision (YYYY-MM-DD | dd/mm/yyyy),
+          periodo_fiscal (mm/yyyy),
+          sujeto: {identificacion, razon_social, tipo_id(opcional)},   # el proveedor retenido
+          doc_sustento: {
+             cod_sustento, cod_doc_sustento, num_doc_sustento(estab+pto+secuencial=15),
+             fecha_emision, num_autorizacion(opcional),
+             total_sin_impuestos, importe_total,
+             impuestos: [{cod, cod_porcentaje, base, tarifa, valor}]   # IVA del doc (opcional)
+          },
+          retenciones: [{codigo(1 renta/2 iva/6 isd), codigo_retencion, base, porcentaje, valor}]
+        }
+
+    Returns: (xml_str, clave_acceso)
+    """
+    fecha_emision = _fmt_fecha(ret.get("fecha_emision"))
+    establecimiento = str(ret.get("establecimiento", "001")).zfill(3)
+    punto_emision = str(ret.get("punto_emision", "001")).zfill(3)
+    secuencial = str(ret.get("secuencial", 1)).zfill(9)
+    ambiente = str(config.get("ambiente", "1"))
+    ruc = config.get("ruc", "")
+    codigo_numerico = f"{random.randint(0, 99999999):08d}"
+
+    clave_acceso = build_clave_acceso(
+        fecha=fecha_emision, tipo_comprobante="07", ruc=ruc, ambiente=ambiente,
+        establecimiento=establecimiento, punto_emision=punto_emision,
+        secuencial=secuencial, codigo_numerico=codigo_numerico)
+
+    root = etree.Element("comprobanteRetencion", id="comprobante", version="2.0.0")
+
+    # --- infoTributaria ---
+    it = etree.SubElement(root, "infoTributaria")
+    _add_text(it, "ambiente", ambiente)
+    _add_text(it, "tipoEmision", "1")
+    _add_text(it, "razonSocial", config.get("razon_social", ""))
+    if config.get("nombre_comercial"):
+        _add_text(it, "nombreComercial", config["nombre_comercial"])
+    _add_text(it, "ruc", ruc)
+    _add_text(it, "claveAcceso", clave_acceso)
+    _add_text(it, "codDoc", "07")
+    _add_text(it, "estab", establecimiento)
+    _add_text(it, "ptoEmi", punto_emision)
+    _add_text(it, "secuencial", secuencial)
+    _add_text(it, "dirMatriz", config.get("direccion_matriz", ""))
+
+    # --- infoCompRetencion ---
+    ic = etree.SubElement(root, "infoCompRetencion")
+    _add_text(ic, "fechaEmision", fecha_emision)
+    _add_text(ic, "dirEstablecimiento", config.get("direccion_matriz", ""))
+    if config.get("contribuyente_especial"):
+        _add_text(ic, "contribuyenteEspecial", config["contribuyente_especial"])
+    _add_text(ic, "obligadoContabilidad", config.get("obligado_contabilidad", "SI"))
+    suj = ret.get("sujeto", {})
+    suj_doc = str(suj.get("identificacion", "")).strip()
+    tipo_id = suj.get("tipo_id") or _tipo_identificacion(suj_doc)
+    _add_text(ic, "tipoIdentificacionSujetoRetenido", tipo_id)
+    # tipoSujetoRetenido: el SRI lo EXIGE solo cuando el retenido es identificación del
+    # exterior (tipo '08'); para RUC/cédula nacional NO debe especificarse.
+    if tipo_id == "08":
+        _add_text(ic, "tipoSujetoRetenido", suj.get("tipo_sujeto") or "01")
+    _add_text(ic, "parteRel", suj.get("parte_rel") or "NO")
+    _add_text(ic, "razonSocialSujetoRetenido", suj.get("razon_social", ""))
+    _add_text(ic, "identificacionSujetoRetenido", suj_doc)
+    _add_text(ic, "periodoFiscal", ret.get("periodo_fiscal") or fecha_emision[3:])
+
+    # --- docsSustento / docSustento ---
+    ds = etree.SubElement(root, "docsSustento")
+    doc = ret.get("doc_sustento", {})
+    d = etree.SubElement(ds, "docSustento")
+    _add_text(d, "codSustento", str(doc.get("cod_sustento", "01")).zfill(2))
+    _add_text(d, "codDocSustento", str(doc.get("cod_doc_sustento", "01")).zfill(2))
+    _add_text(d, "numDocSustento", str(doc.get("num_doc_sustento", "")).zfill(15))
+    _add_text(d, "fechaEmisionDocSustento", _fmt_fecha(doc.get("fecha_emision")))
+    if doc.get("num_autorizacion"):
+        _add_text(d, "numAutDocSustento", doc["num_autorizacion"])
+    _add_text(d, "pagoLocExt", doc.get("pago_loc_ext", "01"))
+    _add_text(d, "totalSinImpuestos", f"{float(doc.get('total_sin_impuestos', 0)):.2f}")
+    _add_text(d, "importeTotal", f"{float(doc.get('importe_total', 0)):.2f}")
+
+    imps = doc.get("impuestos") or []
+    if imps:
+        idt = etree.SubElement(d, "impuestosDocSustento")
+        for im in imps:
+            i = etree.SubElement(idt, "impuestoDocSustento")
+            _add_text(i, "codImpuestoDocSustento", str(im.get("cod", "2")))
+            _add_text(i, "codigoPorcentaje", str(im.get("cod_porcentaje", "4")))
+            _add_text(i, "baseImponible", f"{float(im.get('base', 0)):.2f}")
+            _add_text(i, "tarifa", f"{float(im.get('tarifa', 0)):.0f}")
+            _add_text(i, "valorImpuesto", f"{float(im.get('valor', 0)):.2f}")
+
+    rets = etree.SubElement(d, "retenciones")
+    for r in (ret.get("retenciones") or []):
+        rr = etree.SubElement(rets, "retencion")
+        _add_text(rr, "codigo", str(r.get("codigo", "1")))
+        _add_text(rr, "codigoRetencion", str(r.get("codigo_retencion", "")))
+        _add_text(rr, "baseImponible", f"{float(r.get('base', 0)):.2f}")
+        _add_text(rr, "porcentajeRetener", f"{float(r.get('porcentaje', 0)):.2f}")
+        _add_text(rr, "valorRetenido", f"{float(r.get('valor', 0)):.2f}")
+
+    # pagos (forma de pago del documento de sustento) — requerido por el esquema 2.0.0.
+    pagos = etree.SubElement(d, "pagos")
+    pago = etree.SubElement(pagos, "pago")
+    _add_text(pago, "formaPago", str(doc.get("forma_pago", "20")))  # 20 = con sistema financiero
+    _add_text(pago, "total", f"{float(doc.get('importe_total', 0)):.2f}")
+
+    xml_str = etree.tostring(root, xml_declaration=True, encoding="UTF-8",
+                             pretty_print=True).decode("utf-8")
+    return xml_str, clave_acceso
+
+
+def _tipo_sujeto_retenido(document_id: str) -> str:
+    """SRI 2.0.0: '01' persona natural, '02' sociedad. Se deriva del RUC (13 díg): 3er dígito
+    9 = sociedad privada, 6 = sector público → '02'; cédula (10) o resto → persona natural '01'."""
+    doc = (document_id or "").strip()
+    if len(doc) == 13 and doc.isdigit() and doc[2] in ("6", "9"):
+        return "02"
+    return "01"
+
+
+def _fmt_fecha(v):
+    """A dd/mm/yyyy desde 'YYYY-MM-DD', 'dd/mm/yyyy' o date/datetime. Vacio→hoy."""
+    if v in (None, ""):
+        return datetime.now().strftime("%d/%m/%Y")
+    if hasattr(v, "strftime"):
+        return v.strftime("%d/%m/%Y")
+    s = str(v)[:10]
+    if "-" in s:
+        p = s.split("-")
+        return f"{p[2]}/{p[1]}/{p[0]}" if len(p) == 3 else s
+    return s
