@@ -8,6 +8,7 @@ Generates a PDF for SRI-authorized electronic invoices and credit notes,
 including the clave de acceso as a Code128 barcode.
 """
 import io
+import os
 import logging
 from datetime import datetime
 
@@ -74,6 +75,12 @@ def generate_ride(invoice_data: dict, sri_data: dict, config: dict) -> bytes:
         "ride_bold", parent=styles["Normal"],
         fontSize=8, spaceAfter=1, fontName="Helvetica-Bold",
     )
+    # Cabeceras de tabla: texto blanco sobre fondo oscuro (el TEXTCOLOR del
+    # TableStyle no aplica a Paragraphs; hay que fijar el color en el estilo).
+    style_head_white = ParagraphStyle(
+        "ride_head_white", parent=styles["Normal"],
+        fontSize=8, fontName="Helvetica-Bold", textColor=colors.white,
+    )
     style_center = ParagraphStyle(
         "ride_center", parent=styles["Normal"],
         fontSize=8, alignment=TA_CENTER,
@@ -85,6 +92,12 @@ def generate_ride(invoice_data: dict, sri_data: dict, config: dict) -> bytes:
     style_small = ParagraphStyle(
         "ride_small", parent=styles["Normal"],
         fontSize=7, textColor=colors.HexColor("#4b5563"),
+    )
+    style_warn = ParagraphStyle(
+        "ride_warn", parent=styles["Normal"],
+        fontSize=9, alignment=TA_CENTER, fontName="Helvetica-Bold",
+        textColor=colors.white, backColor=colors.HexColor("#b91c1c"),
+        borderPadding=4, spaceAfter=2,
     )
 
     # ===================================================================
@@ -125,7 +138,34 @@ def generate_ride(invoice_data: dict, sri_data: dict, config: dict) -> bytes:
 <b>Emision:</b> NORMAL<br/>
 <b>Clave de Acceso:</b>"""
 
-    header_data = [[Paragraph(left_info, style_normal), Paragraph(right_info, style_normal)]]
+    # Logo del emisor (por instalacion): config['logo_path'] -> imagen en el encabezado.
+    logo_flowable = None
+    logo_path = config.get("logo_path")
+    if logo_path and os.path.exists(logo_path):
+        try:
+            from reportlab.lib.utils import ImageReader
+            iw, ih = ImageReader(logo_path).getSize()
+            disp_h = 1.0 * inch
+            disp_w = disp_h * iw / float(ih)
+            max_w = 2.6 * inch
+            if disp_w > max_w:
+                disp_w, disp_h = max_w, max_w * ih / float(iw)
+            logo_flowable = Image(logo_path, width=disp_w, height=disp_h)
+            logo_flowable.hAlign = "LEFT"
+        except Exception as e:
+            log.warning("No se pudo cargar el logo del RIDE: %s", e)
+
+    left_cell = ([logo_flowable, Spacer(1, 4), Paragraph(left_info, style_normal)]
+                 if logo_flowable else Paragraph(left_info, style_normal))
+
+    # Sello de borrador cuando el comprobante aun no esta autorizado por el SRI.
+    if not num_autorizacion:
+        elements.append(Paragraph(
+            "DOCUMENTO SIN VALIDEZ TRIBUTARIA &mdash; PENDIENTE DE AUTORIZACION DEL SRI",
+            style_warn))
+        elements.append(Spacer(1, 4))
+
+    header_data = [[left_cell, Paragraph(right_info, style_normal)]]
     header_table = Table(header_data, colWidths=[3.5 * inch, 3.5 * inch])
     header_table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -219,12 +259,12 @@ def generate_ride(invoice_data: dict, sri_data: dict, config: dict) -> bytes:
     lines = invoice_data.get("lines", [])
 
     detail_header = [
-        Paragraph("<b>Cod.</b>", style_bold),
-        Paragraph("<b>Descripcion</b>", style_bold),
-        Paragraph("<b>Cant.</b>", style_bold),
-        Paragraph("<b>P. Unit.</b>", style_bold),
-        Paragraph("<b>Desc.</b>", style_bold),
-        Paragraph("<b>P. Total</b>", style_bold),
+        Paragraph("Cod.", style_head_white),
+        Paragraph("Descripcion", style_head_white),
+        Paragraph("Cant.", style_head_white),
+        Paragraph("P. Unit.", style_head_white),
+        Paragraph("Desc.", style_head_white),
+        Paragraph("P. Total", style_head_white),
     ]
     detail_data = [detail_header]
 
@@ -317,8 +357,8 @@ def generate_ride(invoice_data: dict, sri_data: dict, config: dict) -> bytes:
     payment_table = Table(
         [
             [
-                Paragraph("<b>Forma de Pago</b>", style_bold),
-                Paragraph("<b>Valor</b>", style_bold),
+                Paragraph("Forma de Pago", style_head_white),
+                Paragraph("Valor", style_head_white),
             ],
             [
                 Paragraph("Sin utilizacion del sistema financiero", style_normal),
