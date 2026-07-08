@@ -443,8 +443,12 @@ def generate_retencion_ride(ret_data: dict, sri_data: dict, config: dict) -> byt
     left = f"<b>{razon}</b><br/>"
     if config.get("nombre_comercial") and config["nombre_comercial"] != razon:
         left += f"{config['nombre_comercial']}<br/>"
-    left += (f"<b>RUC:</b> {ruc}<br/><b>Dir. Matriz:</b> {config.get('direccion_matriz','')}<br/>"
-             f"<b>Obligado a llevar contabilidad:</b> {config.get('obligado_contabilidad','SI')}")
+    left += f"<b>RUC:</b> {ruc}<br/><b>Dir. Matriz:</b> {config.get('direccion_matriz','')}<br/>"
+    if config.get("telefono"):
+        left += f"<b>Telefono:</b> {config['telefono']}<br/>"
+    if config.get("email"):
+        left += f"<b>Email:</b> {config['email']}<br/>"
+    left += f"<b>Obligado a llevar contabilidad:</b> {config.get('obligado_contabilidad','SI')}"
     right = (f"<b>COMPROBANTE DE RETENCION</b><br/><b>No.</b> {ret_data.get('numero','')}<br/>"
              f"<b>Ambiente:</b> {ambiente}<br/><b>Emision:</b> NORMAL")
 
@@ -503,9 +507,19 @@ def generate_retencion_ride(ret_data: dict, sri_data: dict, config: dict) -> byt
          Paragraph(f"<b>Fecha Emision:</b> {ret_data.get('fecha_emision','')}", st_norm)],
         [Paragraph(f"<b>Identificacion:</b> {suj.get('identificacion','')}", st_norm),
          Paragraph(f"<b>Periodo Fiscal:</b> {ret_data.get('periodo_fiscal','')}", st_norm)],
-        [Paragraph(f"<b>Doc. sustento:</b> {dsu.get('cod_doc_sustento','')} No. {dsu.get('num_doc_sustento','')}", st_norm),
-         Paragraph(f"<b>Fecha doc.:</b> {dsu.get('fecha_emision','')}", st_norm)],
     ]
+    _extra = []
+    if suj.get("direccion"):
+        _extra.append(f"<b>Direccion:</b> {suj['direccion']}")
+    if suj.get("telefono"):
+        _extra.append(f"<b>Telefono:</b> {suj['telefono']}")
+    if suj.get("email"):
+        _extra.append(f"<b>Email:</b> {suj['email']}")
+    if _extra:
+        info.append([Paragraph(" &nbsp; ".join(_extra), st_norm), Paragraph("", st_norm)])
+    info.append(
+        [Paragraph(f"<b>Doc. sustento:</b> {dsu.get('cod_doc_sustento','')} No. {dsu.get('num_doc_sustento','')}", st_norm),
+         Paragraph(f"<b>Fecha doc.:</b> {dsu.get('fecha_emision','')}", st_norm)])
     it = Table(info, colWidths=[4.5 * inch, 2.5 * inch])
     it.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#94a3b8")),
                             ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#e2e8f0")),
