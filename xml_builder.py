@@ -500,6 +500,22 @@ def _tipo_identificacion(document_id: str) -> str:
     return "06"  # Pasaporte / otro
 
 
+def _tipo_identificacion_retencion(document_id: str) -> str:
+    """Tabla 7 del SRI — identificacion del SUJETO RETENIDO del comprobante de
+    retencion (codDoc 07). NO es la tabla 6 del comprador de factura.
+        01 = RUC (13 digitos)
+        02 = Cedula (10 digitos)
+        03 = Pasaporte / otro
+    (08 = identificacion del exterior; lo pasa explicito el origen, ver build_retencion_xml)
+    """
+    doc = (document_id or "").strip()
+    if len(doc) == 13 and doc.isdigit():
+        return "01"  # RUC
+    if len(doc) == 10 and doc.isdigit():
+        return "02"  # Cedula
+    return "03"  # Pasaporte / otro
+
+
 # ---------------------------------------------------------------------------
 # Comprobante de Retencion XML (tipo_comprobante = '07', schema v2.0.0)
 # ---------------------------------------------------------------------------
@@ -567,7 +583,10 @@ def build_retencion_xml(config: dict, ret: dict):
     _add_text(ic, "obligadoContabilidad", config.get("obligado_contabilidad", "SI"))
     suj = ret.get("sujeto", {})
     suj_doc = str(suj.get("identificacion", "")).strip()
-    tipo_id = suj.get("tipo_id") or _tipo_identificacion(suj_doc)
+    # Tabla 7 del SRI (sujeto retenido): 01=RUC, 02=cédula, 03=pasaporte, 08=exterior.
+    # Se deriva SIEMPRE del documento (no de la tabla 6 del comprador); solo se respeta
+    # '08' explícito del origen para proveedores del exterior.
+    tipo_id = "08" if suj.get("tipo_id") == "08" else _tipo_identificacion_retencion(suj_doc)
     _add_text(ic, "tipoIdentificacionSujetoRetenido", tipo_id)
     # tipoSujetoRetenido: el SRI lo EXIGE solo cuando el retenido es identificación del
     # exterior (tipo '08'); para RUC/cédula nacional NO debe especificarse.
@@ -606,11 +625,17 @@ def build_retencion_xml(config: dict, ret: dict):
     rets = etree.SubElement(d, "retenciones")
     for r in (ret.get("retenciones") or []):
         rr = etree.SubElement(rets, "retencion")
+        base = round(float(r.get("base", 0) or 0), 2)
+        pct = round(float(r.get("porcentaje", 0) or 0), 2)
+        # El SRI VALIDA aritméticamente valorRetenido = round(base * %/100, 2). Se
+        # recomputa aquí para no depender del 'valor' que envíe el origen (evita
+        # rechazos por descuadres de centavos).
+        valor = round(base * pct / 100.0, 2)
         _add_text(rr, "codigo", str(r.get("codigo", "1")))
         _add_text(rr, "codigoRetencion", str(r.get("codigo_retencion", "")))
-        _add_text(rr, "baseImponible", f"{float(r.get('base', 0)):.2f}")
-        _add_text(rr, "porcentajeRetener", f"{float(r.get('porcentaje', 0)):.2f}")
-        _add_text(rr, "valorRetenido", f"{float(r.get('valor', 0)):.2f}")
+        _add_text(rr, "baseImponible", f"{base:.2f}")
+        _add_text(rr, "porcentajeRetener", f"{pct:.2f}")
+        _add_text(rr, "valorRetenido", f"{valor:.2f}")
 
     # pagos (forma de pago del documento de sustento) — requerido por el esquema 2.0.0.
     pagos = etree.SubElement(d, "pagos")
