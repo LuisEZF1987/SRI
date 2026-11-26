@@ -8,6 +8,7 @@ Generates a PDF for SRI-authorized electronic invoices and credit notes,
 including the clave de acceso as a Code128 barcode.
 """
 import io
+import os
 import logging
 
 from reportlab.lib.pagesizes import letter
@@ -16,7 +17,7 @@ from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib import colors
 from reportlab.platypus import (
-    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer,
+    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image,
 )
 from reportlab.graphics.barcode.code128 import Code128
 
@@ -65,6 +66,12 @@ def generate_ride(invoice_data: dict, sri_data: dict, config: dict) -> bytes:
         "ride_bold", parent=styles["Normal"],
         fontSize=8, spaceAfter=1, fontName="Helvetica-Bold",
     )
+    # Cabeceras de tabla: texto blanco sobre fondo oscuro (el TEXTCOLOR del
+    # TableStyle no aplica a Paragraphs; hay que fijar el color en el estilo).
+    style_head_white = ParagraphStyle(
+        "ride_head_white", parent=styles["Normal"],
+        fontSize=8, fontName="Helvetica-Bold", textColor=colors.white,
+    )
     style_center = ParagraphStyle(
         "ride_center", parent=styles["Normal"],
         fontSize=8, alignment=TA_CENTER,
@@ -76,6 +83,12 @@ def generate_ride(invoice_data: dict, sri_data: dict, config: dict) -> bytes:
     style_small = ParagraphStyle(
         "ride_small", parent=styles["Normal"],
         fontSize=7, textColor=colors.HexColor("#4b5563"),
+    )
+    style_warn = ParagraphStyle(
+        "ride_warn", parent=styles["Normal"],
+        fontSize=9, alignment=TA_CENTER, fontName="Helvetica-Bold",
+        textColor=colors.white, backColor=colors.HexColor("#b91c1c"),
+        borderPadding=4, spaceAfter=2,
     )
 
     # ===================================================================
@@ -116,8 +129,45 @@ def generate_ride(invoice_data: dict, sri_data: dict, config: dict) -> bytes:
 <b>Emision:</b> NORMAL<br/>
 <b>Clave de Acceso:</b>"""
 
-    header_data = [[Paragraph(left_info, style_normal), Paragraph(right_info, style_normal)]]
-    header_table = Table(header_data, colWidths=[3.5 * inch, 3.5 * inch])
+    # Logo del emisor (por instalacion): config['logo_path'] -> imagen en el encabezado.
+    logo_flowable = None
+    logo_path = config.get("logo_path")
+    if logo_path and os.path.exists(logo_path):
+        try:
+            from reportlab.lib.utils import ImageReader
+            iw, ih = ImageReader(logo_path).getSize()
+            disp_h = 0.85 * inch
+            disp_w = disp_h * iw / float(ih)
+            max_w = 0.95 * inch
+            if disp_w > max_w:
+                disp_w, disp_h = max_w, max_w * ih / float(iw)
+            logo_flowable = Image(logo_path, width=disp_w, height=disp_h)
+            logo_flowable.hAlign = "LEFT"
+        except Exception as e:
+            log.warning("No se pudo cargar el logo del RIDE: %s", e)
+
+    # Logo a la izquierda y datos del emisor al lado (no debajo), para no empujar el texto.
+    _emisor_para = Paragraph(left_info, style_normal)
+    if logo_flowable:
+        left_cell = Table([[logo_flowable, _emisor_para]], colWidths=[1.05 * inch, 3.5 * inch])
+        left_cell.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                       ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                                       ("RIGHTPADDING", (0, 0), (0, 0), 6),
+                                       ("RIGHTPADDING", (1, 0), (1, 0), 0),
+                                       ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                       ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
+    else:
+        left_cell = _emisor_para
+
+    # Sello de borrador cuando el comprobante aun no esta autorizado por el SRI.
+    if not num_autorizacion:
+        elements.append(Paragraph(
+            "DOCUMENTO SIN VALIDEZ TRIBUTARIA &mdash; PENDIENTE DE AUTORIZACION DEL SRI",
+            style_warn))
+        elements.append(Spacer(1, 4))
+
+    header_data = [[left_cell, Paragraph(right_info, style_normal)]]
+    header_table = Table(header_data, colWidths=[4.7 * inch, 2.8 * inch])
     header_table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
@@ -210,12 +260,12 @@ def generate_ride(invoice_data: dict, sri_data: dict, config: dict) -> bytes:
     lines = invoice_data.get("lines", [])
 
     detail_header = [
-        Paragraph("<b>Cod.</b>", style_bold),
-        Paragraph("<b>Descripcion</b>", style_bold),
-        Paragraph("<b>Cant.</b>", style_bold),
-        Paragraph("<b>P. Unit.</b>", style_bold),
-        Paragraph("<b>Desc.</b>", style_bold),
-        Paragraph("<b>P. Total</b>", style_bold),
+        Paragraph("Cod.", style_head_white),
+        Paragraph("Descripcion", style_head_white),
+        Paragraph("Cant.", style_head_white),
+        Paragraph("P. Unit.", style_head_white),
+        Paragraph("Desc.", style_head_white),
+        Paragraph("P. Total", style_head_white),
     ]
     detail_data = [detail_header]
 
@@ -308,8 +358,8 @@ def generate_ride(invoice_data: dict, sri_data: dict, config: dict) -> bytes:
     payment_table = Table(
         [
             [
-                Paragraph("<b>Forma de Pago</b>", style_bold),
-                Paragraph("<b>Valor</b>", style_bold),
+                Paragraph("Forma de Pago", style_head_white),
+                Paragraph("Valor", style_head_white),
             ],
             [
                 Paragraph("Sin utilizacion del sistema financiero", style_normal),
@@ -353,6 +403,167 @@ def generate_ride(invoice_data: dict, sri_data: dict, config: dict) -> bytes:
     )
 
     # Build PDF
+    doc.build(elements)
+    buf.seek(0)
+    return buf.read()
+
+
+def generate_retencion_ride(ret_data: dict, sri_data: dict, config: dict) -> bytes:
+    """RIDE del Comprobante de Retencion electronico (codDoc 07).
+
+    ret_data: {numero (001-001-000000012), fecha_emision, periodo_fiscal,
+        sujeto:{razon_social, identificacion}, doc_sustento:{cod_doc_sustento,
+        num_doc_sustento, fecha_emision}, retenciones:[{codigo, codigo_retencion,
+        base, porcentaje, valor}]}
+    sri_data: {clave_acceso, numero_autorizacion, fecha_autorizacion}
+    config: {razon_social, nombre_comercial, ruc, direccion_matriz, obligado_contabilidad,
+        ambiente, logo_path}
+    """
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, leftMargin=0.5 * inch,
+                            rightMargin=0.5 * inch, topMargin=0.4 * inch, bottomMargin=0.4 * inch)
+    styles = getSampleStyleSheet()
+    elements = []
+    st_norm = ParagraphStyle("r_n", parent=styles["Normal"], fontSize=8, spaceAfter=1)
+    st_head = ParagraphStyle("r_h", parent=styles["Normal"], fontSize=8,
+                             fontName="Helvetica-Bold", textColor=colors.white)
+    st_center = ParagraphStyle("r_c", parent=styles["Normal"], fontSize=8, alignment=TA_CENTER)
+    st_right = ParagraphStyle("r_r", parent=styles["Normal"], fontSize=8, alignment=TA_RIGHT)
+    st_small = ParagraphStyle("r_s", parent=styles["Normal"], fontSize=7,
+                              textColor=colors.HexColor("#4b5563"))
+    st_warn = ParagraphStyle("r_w", parent=styles["Normal"], fontSize=9, alignment=TA_CENTER,
+                             fontName="Helvetica-Bold", textColor=colors.white,
+                             backColor=colors.HexColor("#b91c1c"), borderPadding=4, spaceAfter=2)
+
+    razon = config.get("razon_social", "")
+    ruc = config.get("ruc", "")
+    ambiente = "PRODUCCION" if str(config.get("ambiente", "1")) == "2" else "PRUEBAS"
+    clave = sri_data.get("clave_acceso", "")
+    num_aut = sri_data.get("numero_autorizacion", "")
+
+    left = f"<b>{razon}</b><br/>"
+    if config.get("nombre_comercial") and config["nombre_comercial"] != razon:
+        left += f"{config['nombre_comercial']}<br/>"
+    left += f"<b>RUC:</b> {ruc}<br/><b>Dir. Matriz:</b> {config.get('direccion_matriz','')}<br/>"
+    if config.get("telefono"):
+        left += f"<b>Telefono:</b> {config['telefono']}<br/>"
+    if config.get("email"):
+        left += f"<b>Email:</b> {config['email']}<br/>"
+    left += f"<b>Obligado a llevar contabilidad:</b> {config.get('obligado_contabilidad','SI')}"
+    right = (f"<b>COMPROBANTE DE RETENCION</b><br/><b>No.</b> {ret_data.get('numero','')}<br/>"
+             f"<b>Ambiente:</b> {ambiente}<br/><b>Emision:</b> NORMAL")
+
+    logo_flowable = None
+    lp = config.get("logo_path")
+    if lp and os.path.exists(lp):
+        try:
+            from reportlab.lib.utils import ImageReader
+            iw, ih = ImageReader(lp).getSize()
+            dh = 0.85 * inch
+            dw = dh * iw / float(ih)
+            if dw > 0.95 * inch:  # logos anchos: limita el ancho y recalcula el alto
+                dw, dh = 0.95 * inch, 0.95 * inch * ih / float(iw)
+            logo_flowable = Image(lp, width=dw, height=dh)
+            logo_flowable.hAlign = "LEFT"
+        except Exception as e:
+            log.warning("logo RIDE retencion: %s", e)
+    # Logo a la izquierda y datos del emisor al lado (no debajo), para no empujar el texto.
+    emisor_para = Paragraph(left, st_norm)
+    if logo_flowable:
+        left_cell = Table([[logo_flowable, emisor_para]], colWidths=[1.05 * inch, 3.5 * inch])
+        left_cell.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                       ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                                       ("RIGHTPADDING", (0, 0), (0, 0), 6),
+                                       ("RIGHTPADDING", (1, 0), (1, 0), 0),
+                                       ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                       ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
+    else:
+        left_cell = emisor_para
+
+    if not num_aut:
+        elements.append(Paragraph(
+            "DOCUMENTO SIN VALIDEZ TRIBUTARIA &mdash; PENDIENTE DE AUTORIZACION DEL SRI", st_warn))
+        elements.append(Spacer(1, 4))
+
+    ht = Table([[left_cell, Paragraph(right, st_norm)]], colWidths=[4.7 * inch, 2.8 * inch])
+    ht.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                            ("BOX", (0, 0), (0, 0), 0.5, colors.HexColor("#94a3b8")),
+                            ("BOX", (1, 0), (1, 0), 0.5, colors.HexColor("#94a3b8")),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                            ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
+    elements.append(ht)
+    elements.append(Spacer(1, 6))
+
+    if clave:
+        elements.append(Paragraph("<b>CLAVE DE ACCESO</b>", st_center))
+        try:
+            bc = Table([[Code128(clave, barWidth=0.8, barHeight=30)]], colWidths=[7 * inch])
+            bc.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "CENTER")]))
+            elements.append(bc)
+        except Exception as e:
+            log.warning("barcode retencion: %s", e)
+        elements.append(Paragraph(f"<font size='6'>{clave}</font>", st_center))
+        elements.append(Spacer(1, 4))
+    if num_aut:
+        elements.append(Paragraph(
+            f"<b>No. Autorizacion:</b> {num_aut}    <b>Fecha:</b> {sri_data.get('fecha_autorizacion','')}",
+            st_small))
+    elements.append(Spacer(1, 8))
+
+    # Sujeto retenido + periodo
+    suj = ret_data.get("sujeto", {})
+    dsu = ret_data.get("doc_sustento", {})
+    info = [
+        [Paragraph(f"<b>Sujeto retenido:</b> {suj.get('razon_social','')}", st_norm),
+         Paragraph(f"<b>Fecha Emision:</b> {ret_data.get('fecha_emision','')}", st_norm)],
+        [Paragraph(f"<b>Identificacion:</b> {suj.get('identificacion','')}", st_norm),
+         Paragraph(f"<b>Periodo Fiscal:</b> {ret_data.get('periodo_fiscal','')}", st_norm)],
+    ]
+    _extra = []
+    if suj.get("direccion"):
+        _extra.append(f"<b>Direccion:</b> {suj['direccion']}")
+    if suj.get("telefono"):
+        _extra.append(f"<b>Telefono:</b> {suj['telefono']}")
+    if suj.get("email"):
+        _extra.append(f"<b>Email:</b> {suj['email']}")
+    if _extra:
+        info.append([Paragraph(" &nbsp; ".join(_extra), st_norm), Paragraph("", st_norm)])
+    info.append(
+        [Paragraph(f"<b>Doc. sustento:</b> {dsu.get('cod_doc_sustento','')} No. {dsu.get('num_doc_sustento','')}", st_norm),
+         Paragraph(f"<b>Fecha doc.:</b> {dsu.get('fecha_emision','')}", st_norm)])
+    it = Table(info, colWidths=[4.5 * inch, 2.5 * inch])
+    it.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#94a3b8")),
+                            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#e2e8f0")),
+                            ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 4)]))
+    elements.append(it)
+    elements.append(Spacer(1, 8))
+
+    # Detalle de retenciones
+    _imp = {"1": "RENTA", "2": "IVA", "6": "ISD"}
+    rows = [[Paragraph("Impuesto", st_head), Paragraph("Cod. ret.", st_head),
+             Paragraph("Base imponible", st_head), Paragraph("%", st_head),
+             Paragraph("Valor retenido", st_head)]]
+    tot = 0.0
+    for r in ret_data.get("retenciones", []):
+        tot += float(r.get("valor", 0))
+        rows.append([Paragraph(_imp.get(str(r.get("codigo")), str(r.get("codigo"))), st_norm),
+                     Paragraph(str(r.get("codigo_retencion", "")), st_norm),
+                     Paragraph(f"${float(r.get('base',0)):.2f}", st_right),
+                     Paragraph(f"{float(r.get('porcentaje',0)):.2f}", st_right),
+                     Paragraph(f"${float(r.get('valor',0)):.2f}", st_right)])
+    rows.append(["", "", "", Paragraph("<b>TOTAL</b>", st_right), Paragraph(f"<b>${tot:.2f}</b>", st_right)])
+    dt = Table(rows, colWidths=[1.4 * inch, 1.2 * inch, 1.6 * inch, 0.8 * inch, 2.0 * inch])
+    dt.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e293b")),
+                            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+                            ("FONTSIZE", (0, 0), (-1, -1), 8),
+                            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#f1f5f9")),
+                            ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)]))
+    elements.append(dt)
+    elements.append(Spacer(1, 12))
+    elements.append(Paragraph("Documento generado electronicamente - RIDE",
+                              ParagraphStyle("rf", parent=st_center, fontSize=7,
+                                             textColor=colors.HexColor("#6b7280"))))
     doc.build(elements)
     buf.seek(0)
     return buf.read()

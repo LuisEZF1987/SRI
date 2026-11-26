@@ -113,3 +113,66 @@ def test_nota_credito_referencia_factura_original():
     # El prefijo FAC- se quita para dejar el número SRI puro.
     assert root.findtext("infoNotaCredito/numDocModificado") == "001-001-000000123"
     assert root.findtext("infoNotaCredito/codDocModificado") == "01"
+
+
+# ── Regresiones verificadas contra el SRI de PRUEBAS (celcer) 2026-11-26 ────
+# Antes de este fix el SRI DEVOLVÍA toda nota de crédito y toda retención (error 35,
+# estructura). Con el fix, factura + NC + retención quedaron AUTORIZADO en celcer.
+def test_nota_credito_orden_del_xsd_info_nota_credito():
+    """XSD notaCredito 1.1.0: el comprador va ANTES de obligadoContabilidad."""
+    nc = dict(_invoice(), notes="Devolución")
+    root = etree.fromstring(xb.build_nota_credito_xml(
+        CONFIG, nc, _lines(), {"invoice_number": "FAC-001-001-000000123",
+                                "created_at": "2026-06-01"}).encode("utf-8"))
+    tags = [e.tag for e in root.find("infoNotaCredito")]
+    orden = ["fechaEmision", "dirEstablecimiento", "tipoIdentificacionComprador",
+             "razonSocialComprador", "identificacionComprador", "obligadoContabilidad",
+             "codDocModificado", "numDocModificado", "fechaEmisionDocSustento",
+             "totalSinImpuestos", "valorModificacion", "moneda", "totalConImpuestos", "motivo"]
+    presentes = [t for t in orden if t in tags]
+    assert [t for t in tags if t in orden] == presentes
+
+
+def test_nota_credito_a_tercero_usa_el_comprador_de_la_factura():
+    original = dict(_invoice(), invoice_number="FAC-001-001-000000123",
+                    bill_to_document="1790012345001", bill_to_name="CONSTRUCTORA XYZ")
+    nc = dict(_invoice(), notes="Devolución")   # la NC no trae bill_to: se hereda
+    root = etree.fromstring(xb.build_nota_credito_xml(CONFIG, nc, _lines(), original)
+                            .encode("utf-8"))
+    assert root.findtext("infoNotaCredito/identificacionComprador") == "1790012345001"
+    assert root.findtext("infoNotaCredito/tipoIdentificacionComprador") == "04"
+
+
+def _ret(doc):
+    return {"secuencial": 1, "fecha_emision": "2026-11-26", "periodo_fiscal": "11/2026",
+            "sujeto": {"identificacion": doc, "razon_social": "PROVEEDOR"},
+            "doc_sustento": {"num_doc_sustento": "001001000000123", "fecha_emision": "2026-11-20",
+                             "total_sin_impuestos": 100, "importe_total": 115},
+            "retenciones": [{"codigo": "1", "codigo_retencion": "303", "base": 100,
+                             "porcentaje": 10, "valor": 9.99}]}
+
+
+@pytest.mark.parametrize("doc,esperado", [("1790012345001", "04"), ("1712345678", "05"),
+                                          ("AB123456", "06")])
+def test_retencion_tipo_id_sujeto_cumple_patron_xsd(doc, esperado):
+    """XSD comprobanteRetencion 2.0.0: tipoIdentificacionSujetoRetenido = [0][4-8]."""
+    xml, clave = xb.build_retencion_xml(CONFIG, _ret(doc))
+    root = etree.fromstring(xml.encode("utf-8"))
+    t = root.findtext("infoCompRetencion/tipoIdentificacionSujetoRetenido")
+    assert t == esperado and t[0] == "0" and "4" <= t[1] <= "8"
+    assert root.find("infoCompRetencion/tipoSujetoRetenido") is None  # solo para exterior
+    assert len(clave) == 49 and clave[8:10] == "07"
+
+
+def test_retencion_recalcula_valor_retenido():
+    xml, _ = xb.build_retencion_xml(CONFIG, _ret("1790012345001"))
+    root = etree.fromstring(xml.encode("utf-8"))
+    assert root.findtext(".//retencion/valorRetenido") == "10.00"   # no el 9.99 del origen
+
+
+def test_retencion_exterior_lleva_tipo_sujeto():
+    r = _ret("P-998877")
+    r["sujeto"]["tipo_id"] = "08"
+    root = etree.fromstring(xb.build_retencion_xml(CONFIG, r)[0].encode("utf-8"))
+    assert root.findtext("infoCompRetencion/tipoIdentificacionSujetoRetenido") == "08"
+    assert root.findtext("infoCompRetencion/tipoSujetoRetenido") in ("01", "02")
