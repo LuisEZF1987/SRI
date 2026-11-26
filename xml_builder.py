@@ -381,16 +381,23 @@ def build_nota_credito_xml(
     info_nc = etree.SubElement(root, "infoNotaCredito")
     _add_text(info_nc, "fechaEmision", fecha_emision)
     _add_text(info_nc, "dirEstablecimiento", config.get("direccion_matriz", ""))
+    # El comprador de la NC es el MISMO de la factura que modifica (si se facturó a un
+    # tercero -bill_to-, es el tercero). Orden del XSD notaCredito 1.1.0:
+    # tipoIdentificacionComprador, razonSocialComprador, identificacionComprador,
+    # contribuyenteEspecial?, obligadoContabilidad?  (antes iba obligadoContabilidad
+    # primero y el SRI devolvía TODA nota de crédito: error 35 de estructura).
+    src = credit_note if (credit_note.get("bill_to_document") or "").strip() else original_invoice
+    if (src.get("bill_to_document") or "").strip():
+        comp_doc = src["bill_to_document"].strip()
+        comp_name = src.get("bill_to_name") or "CONSUMIDOR FINAL"
+    else:
+        comp_doc = credit_note.get("patient_document", "")
+        comp_name = credit_note.get("patient_name", "CONSUMIDOR FINAL")
+    _add_text(info_nc, "tipoIdentificacionComprador", _tipo_identificacion(comp_doc))
+    _add_text(info_nc, "razonSocialComprador", comp_name)
+    _add_text(info_nc, "identificacionComprador", comp_doc or "9999999999999")
     if config.get("obligado_contabilidad"):
         _add_text(info_nc, "obligadoContabilidad", config["obligado_contabilidad"])
-
-    patient_doc = credit_note.get("patient_document", "")
-    tipo_id = _tipo_identificacion(patient_doc)
-    _add_text(info_nc, "tipoIdentificacionComprador", tipo_id)
-    _add_text(info_nc, "razonSocialComprador",
-              credit_note.get("patient_name", "CONSUMIDOR FINAL"))
-    _add_text(info_nc, "identificacionComprador",
-              patient_doc or "9999999999999")
 
     # Reference to original document
     _add_text(info_nc, "codDocModificado", "01")  # Factura
@@ -501,19 +508,19 @@ def _tipo_identificacion(document_id: str) -> str:
 
 
 def _tipo_identificacion_retencion(document_id: str) -> str:
-    """Tabla 7 del SRI — identificacion del SUJETO RETENIDO del comprobante de
-    retencion (codDoc 07). NO es la tabla 6 del comprador de factura.
-        01 = RUC (13 digitos)
-        02 = Cedula (10 digitos)
-        03 = Pasaporte / otro
-    (08 = identificacion del exterior; lo pasa explicito el origen, ver build_retencion_xml)
+    """tipoIdentificacionSujetoRetenido del comprobante de retención 2.0.0.
+    El XSD del SRI lo restringe al patrón [0][4-8] = MISMA tabla que el comprador:
+        04 = RUC, 05 = cédula, 06 = pasaporte, 08 = identificación del exterior.
+    (2026-11-26: el cambio del 09-jul a 01/02/03 -códigos del ATS, no del XML- hizo
+    que el SRI devolviera TODA retención: "Value '01' is not facet-valid ... [0][4-8]".
+    Verificado contra el SRI de pruebas.)
     """
     doc = (document_id or "").strip()
     if len(doc) == 13 and doc.isdigit():
-        return "01"  # RUC
+        return "04"  # RUC
     if len(doc) == 10 and doc.isdigit():
-        return "02"  # Cedula
-    return "03"  # Pasaporte / otro
+        return "05"  # Cédula
+    return "06"  # Pasaporte / otro
 
 
 # ---------------------------------------------------------------------------
@@ -583,9 +590,8 @@ def build_retencion_xml(config: dict, ret: dict):
     _add_text(ic, "obligadoContabilidad", config.get("obligado_contabilidad", "SI"))
     suj = ret.get("sujeto", {})
     suj_doc = str(suj.get("identificacion", "")).strip()
-    # Tabla 7 del SRI (sujeto retenido): 01=RUC, 02=cédula, 03=pasaporte, 08=exterior.
-    # Se deriva SIEMPRE del documento (no de la tabla 6 del comprador); solo se respeta
-    # '08' explícito del origen para proveedores del exterior.
+    # Patrón XSD [0][4-8]: 04=RUC, 05=cédula, 06=pasaporte, 08=exterior. Se deriva del
+    # documento; solo se respeta '08' explícito del origen (proveedores del exterior).
     tipo_id = "08" if suj.get("tipo_id") == "08" else _tipo_identificacion_retencion(suj_doc)
     _add_text(ic, "tipoIdentificacionSujetoRetenido", tipo_id)
     # tipoSujetoRetenido: el SRI lo EXIGE solo cuando el retenido es identificación del
