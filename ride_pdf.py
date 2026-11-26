@@ -17,7 +17,7 @@ from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib import colors
 from reportlab.platypus import (
-    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image,
+    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer,
 )
 from reportlab.graphics.barcode.code128 import Code128
 

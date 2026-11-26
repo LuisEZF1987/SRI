@@ -33,7 +33,9 @@ def _c14n(node) -> bytes:
 
 
 def _sha1_b64(data: bytes) -> str:
-    return base64.b64encode(hashlib.sha1(data).digest()).decode()
+    # SHA1 es el digest que EXIGE la ficha tecnica del SRI para XAdES-BES;
+    # no es negociable sin que el comprobante sea rechazado.
+    return base64.b64encode(hashlib.sha1(data).digest()).decode()  # nosec B324
 
 
 def _b64_chunked(data: bytes, width: int = 76) -> str:
@@ -53,7 +55,10 @@ def sign(xml_str: str, key_pem: bytes, cert_pem: bytes, signing_time_iso: str) -
     cert_der = cert.public_bytes(encoding=__import__("cryptography").hazmat.primitives.serialization.Encoding.DER)
 
     # IDs deterministas por contenido (no aleatorios -> reproducible en tests).
-    tag = hashlib.sha1((signing_time_iso + str(cert.serial_number)).encode()).hexdigest()[:10]
+    tag = hashlib.sha1(  # solo genera IDs, sin rol criptografico
+        (signing_time_iso + str(cert.serial_number)).encode(),
+        usedforsecurity=False,
+    ).hexdigest()[:10]
     sig_id = f"Signature{tag}"
     sp_id = f"{sig_id}-SignedProperties"
     si_ref_sp_id = f"{sp_id}-Ref"
@@ -145,7 +150,8 @@ def sign(xml_str: str, key_pem: bytes, cert_pem: bytes, signing_time_iso: str) -
     # --- SignatureValue: firmar SignedInfo canonicalizado ---------------------
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import padding
-    signature = key.sign(_c14n(signed_info), padding.PKCS1v15(), hashes.SHA1())
+    # RSA-SHA1: algoritmo de firma que EXIGE el SRI (ver docstring del modulo).
+    signature = key.sign(_c14n(signed_info), padding.PKCS1v15(), hashes.SHA1())  # nosec B303
     sig_value.text = _b64_chunked(signature)
 
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8").decode("utf-8")
